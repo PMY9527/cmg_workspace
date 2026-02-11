@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+# /runs
+# *.pt
+*.pth
+# *.npz
+*.jpg
+*.jpeg
+*.svg
+.claude
+# *.onnx
+# dataloader/cmg_training_data.pt

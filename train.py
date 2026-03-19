@@ -1,4 +1,5 @@
 import torch
+torch.set_float32_matmul_precision('high')
 import time
 import os
 from module.cmg import CMG
@@ -9,13 +10,18 @@ from datetime import datetime, timedelta
 
 # Config
 DATA_PATH = "dataloader/cmg_training_data.pt"
-BATCH_SIZE = 256
+BATCH_SIZE = 512
 NUM_EPOCHS = 1000
 SAVE_INTERVAL = 50
 LR = 3e-4
 
+# CMG cfgs
+HIDDEN_DIM = 512
+NUM_EXPERTS = 8
+NUM_LAYERS = 3
+
 # Resume (set to checkpoint path to resume, None to start fresh)
-RESUME_PATH ="runs/cmg_20260211_040530/cmg_ckpt_800.pt" # =None to restart
+RESUME_PATH = None # = None to restart
 RESUME_LR = None # None
 
 # TensorBoard setup
@@ -25,7 +31,7 @@ writer = SummaryWriter(log_dir)
 print(f"TensorBoard logs: {log_dir}")
 
 # DataLoader
-dataloader, stats = get_dataloader(DATA_PATH, batch_size=BATCH_SIZE)
+dataloader, stats = get_dataloader(DATA_PATH, batch_size=BATCH_SIZE, num_workers=8)
 print(f"Batches per epoch: {len(dataloader)}")
 
 # Model
@@ -35,31 +41,33 @@ command_dim = stats["command_dim"]
 model = CMG(
     motion_dim=motion_dim,
     command_dim=command_dim,
-    hidden_dim=512,
-    num_experts=4,
-    num_layers=3,
+    hidden_dim=HIDDEN_DIM,
+    num_experts=NUM_EXPERTS,
+    num_layers=NUM_LAYERS,
 )
 
-# Compute normalized standing pose from sample 22287
+# Compute normalized standing pose from sample 54464
 raw_data = torch.load(DATA_PATH, weights_only=False)
-standing_raw = torch.from_numpy(raw_data["samples"][22287]["motion"][0]).float()
+standing_raw = torch.from_numpy(raw_data["samples"][54464]["motion"][0]).float()
 standing_pose = (standing_raw - stats["motion_mean"]) / stats["motion_std"]
 standing_pose = standing_pose.cuda()
-print(f"Standing pose loaded (sample 22287)")
+print(f"Standing pose loaded (sample 54464)")
 
-trainer = CMGTrainer(model, lr=LR, standing_pose=standing_pose)
-
-scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-    trainer.optimizer, mode='min', factor=0.5, patience=10, min_lr=1e-6
-)
-
-# Resume from checkpoint
+# Resume from checkpoint (load before compile)
 start_epoch = 0
 if RESUME_PATH:
     ckpt = torch.load(RESUME_PATH, weights_only=False)
-    model.load_state_dict(ckpt["model_state_dict"])
-    trainer.optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+    sd = ckpt["model_state_dict"]
+    sd = {k.replace("_orig_mod.", ""): v for k, v in sd.items()}
+    model.load_state_dict(sd)
     start_epoch = ckpt["epoch"] + 1
+
+model = torch.compile(model)
+
+trainer = CMGTrainer(model, lr=LR, standing_pose=standing_pose)
+
+if RESUME_PATH:
+    trainer.optimizer.load_state_dict(ckpt["optimizer_state_dict"])
     if RESUME_LR:
         for pg in trainer.optimizer.param_groups:
             pg['lr'] = RESUME_LR
@@ -75,14 +83,11 @@ print("Starting training...")
 for epoch in range(start_epoch, NUM_EPOCHS):
     epoch_start = time.time()
     loss = trainer.train_epoch(dataloader)
-    scheduler.step(loss)  
     epoch_time = time.time() - epoch_start
     elapsed = time.time() - start_time
     remaining = (elapsed / (epoch + 1)) * (NUM_EPOCHS - epoch - 1)
     
-    current_lr = trainer.optimizer.param_groups[0]['lr']
     # TensorBoard
-    writer.add_scalar('metrics/Learning Rate', current_lr, epoch)
     writer.add_scalar('metrics/MSE Loss', loss, epoch)
     writer.add_scalar('metrics/Teacher Prob', trainer.teacher_prob, epoch)
     # writer.add_scalar('Time/epoch_seconds', epoch_time, epoch)
@@ -101,14 +106,15 @@ for epoch in range(start_epoch, NUM_EPOCHS):
     # Save best
     if loss < best_loss:
         best_loss = loss
-        torch.save(model.state_dict(), f"{log_dir}/cmg_best.pt")
+        sd = {k.replace("_orig_mod.", ""): v for k, v in model.state_dict().items()}
+        torch.save(sd, f"{log_dir}/cmg_best.pt")
         print(f"  -> New best: {best_loss:.4f}")
     
     # Checkpoint
     if (epoch + 1) % SAVE_INTERVAL == 0:
         torch.save({
             'epoch': epoch,
-            'model_state_dict': model.state_dict(),
+            'model_state_dict': {k.replace("_orig_mod.", ""): v for k, v in model.state_dict().items()},
             'optimizer_state_dict': trainer.optimizer.state_dict(),
             'loss': loss,
             'stats': stats,
@@ -116,7 +122,7 @@ for epoch in range(start_epoch, NUM_EPOCHS):
 
 # Final
 torch.save({
-    'model_state_dict': model.state_dict(),
+    'model_state_dict': {k.replace("_orig_mod.", ""): v for k, v in model.state_dict().items()},
     'stats': stats,
 }, f"{log_dir}/cmg_final.pt")
 

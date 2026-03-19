@@ -6,14 +6,14 @@ sys.path.insert(0, ROOT_DIR)
 import torch
 import torch.onnx
 from module.cmg import CMG
-checkpoint = torch.load(os.path.join(ROOT_DIR, "runs/cmg_20260211_040530/cmg_ckpt_700.pt"),
+checkpoint = torch.load(os.path.join(ROOT_DIR, "runs/cmg_20260316_162827/cmg_ckpt_350.pt"),
                         map_location="cpu", weights_only=False)
 
 model = CMG( # the same as train.py
         motion_dim=58,
         command_dim=3,
         hidden_dim=512,
-        num_experts=4,
+        num_experts=8,
         num_layers=3,
     )
 
@@ -28,7 +28,7 @@ dummy_command = torch.zeros(1, 3)  # e.g., 3 for velocity commands
 torch.onnx.export(
     model,
     (dummy_obs, dummy_command),  # tuple of inputs
-    os.path.join(ROOT_DIR, "eval/cmg_exported.onnx"),
+    os.path.join(ROOT_DIR, "evaluations/cmg_exported.onnx"),
     input_names=["prev_motion", "command"],
     output_names=["motion"],
     opset_version=11,

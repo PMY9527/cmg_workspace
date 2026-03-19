@@ -7,25 +7,29 @@ import torch
 import numpy as np
 from module.cmg import CMG
 
-MODEL_PATH = os.path.join(ROOT_DIR, 'runs/cmg_20260211_040530/cmg_ckpt_800.pt')
+MODEL_PATH = os.path.join(ROOT_DIR, 'runs/cmg_20260316_162827/cmg_ckpt_350.pt')
 DATA_PATH = os.path.join(ROOT_DIR, 'dataloader/cmg_training_data.pt')
 OUTPUT_PATH = os.path.join(ROOT_DIR, 'evaluations/autoregressive_motion.npz')
 
-VX = 1.5 # fails for all vx < 1.2 m/s fuck this shit
+VX = 0.5
 VY = 0.0
 YAW = 0.0
 DURATION = 1200 # 60 fps, 20 sec.
 
+# Must match train.py
+NUM_EXPERTS = 8
+
 def load_model_and_stats(model_path, data_path, device='cuda'):
-    
+
     data = torch.load(data_path, weights_only=False)
+    print(f"model:{MODEL_PATH}")
     stats = data["stats"]
-    
-    model = CMG( # the same as train.py
+
+    model = CMG(
         motion_dim=stats["motion_dim"],
         command_dim=stats["command_dim"],
         hidden_dim=512,
-        num_experts=4,
+        num_experts=NUM_EXPERTS,
         num_layers=3,
     )
 
@@ -55,13 +59,13 @@ def generate_motion(model, init_motion, commands, stats, device='cuda'):
     """
     motion_mean = torch.from_numpy(stats["motion_mean"]).to(device)
     motion_std = torch.from_numpy(stats["motion_std"]).to(device)
-    cmd_min = torch.from_numpy(stats["command_min"]).to(device)
-    cmd_max = torch.from_numpy(stats["command_max"]).to(device)
-    
-    current = (torch.from_numpy(init_motion).to(device) - motion_mean) / motion_std # 归一化初始帧
-    
+    cmd_mean = torch.from_numpy(stats["command_mean"]).to(device)
+    cmd_std = torch.from_numpy(stats["command_std"]).to(device)
+
+    current = (torch.from_numpy(init_motion).to(device) - motion_mean) / motion_std
+
     commands = torch.from_numpy(commands).to(device)
-    commands_norm = (commands - cmd_min) / (cmd_max - cmd_min) * 2 - 1 #  归一化cmd [min, max] → [-1, 1]
+    commands_norm = (commands - cmd_mean) / cmd_std
     
     generated = [current.clone()]
     
@@ -78,6 +82,28 @@ def generate_motion(model, init_motion, commands, stats, device='cuda'):
     generated = generated * motion_std + motion_mean
     
     return generated.cpu().numpy()
+
+
+def find_init_by_speed(samples, target_vx, target_vy=0.0):
+    """Find a training sample whose average command matches the target speed.
+    Prefers steady, straight-line clips (low vx variance, low yaw).
+    Returns the first frame of the best-matching sample (unnormalized)."""
+    best_idx = 0
+    best_score = float('inf')
+    for i, s in enumerate(samples):
+        cmd = s["command"]  # [seq_len, 3]
+        avg_vx = cmd[:, 0].mean()
+        avg_vy = cmd[:, 1].mean()
+        vx_std = cmd[:, 0].std()
+        avg_yaw = abs(cmd[:, 2].mean())
+        # Speed match + penalize unsteady/turning clips
+        score = (avg_vx - target_vx)**2 + (avg_vy - target_vy)**2 + vx_std**2 + avg_yaw**2
+        if score < best_score:
+            best_score = score
+            best_idx = i
+    cmd = samples[best_idx]["command"]
+    print(f"Init from sample {best_idx} (avg_vx={cmd[:,0].mean():.3f}, vx_std={cmd[:,0].std():.3f}, avg_yaw={cmd[:,2].mean():.3f})")
+    return samples[best_idx]["motion"][0].astype(np.float32)
 
 
 def motion_to_npz(motion, output_path, fps):
@@ -112,16 +138,16 @@ if __name__ == "__main__":
     
     model, stats, samples = load_model_and_stats(MODEL_PATH, DATA_PATH, device)
     
-    # First frame
-    init_motion = np.zeros(58, dtype=np.float32)
+    # Init from speed-matched sample instead of standing pose
+    init_motion = find_init_by_speed(samples, target_vx=VX, target_vy=VY)
     commands = np.tile([VX, VY, YAW], (DURATION, 1)).astype(np.float32)
-    
+
     print(" ==== Custom Cmd: ==== ")
-    print(f"Init with zeros")
     print(f"vx: {VX} m/s")
     print(f"vy: {VY} m/s")
     print(f"yaw: {YAW} rad/s")
     print(f"# Frames: {DURATION}, ({DURATION/50:.2f}s)")
+    print(f"Model: experts={NUM_EXPERTS}")
 
     generated = generate_motion(model, init_motion, commands, stats, device)
     

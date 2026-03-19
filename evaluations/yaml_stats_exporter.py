@@ -18,6 +18,8 @@ out = {
     "motion_std": stats["motion_std"].tolist(),
     "command_min": stats["command_min"].tolist(),
     "command_max": stats["command_max"].tolist(),
+    "command_mean": stats["command_mean"].tolist(),
+    "command_std": stats["command_std"].tolist(),
 }
 
 with open(OUTPUT_PATH, "w") as f:

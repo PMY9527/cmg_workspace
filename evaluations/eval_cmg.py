@@ -8,10 +8,10 @@ import numpy as np
 from module.cmg import CMG
 
 MODEL_PATH = os.path.join(ROOT_DIR, 'runs/cmg_20260316_162827/cmg_ckpt_350.pt')
-DATA_PATH = os.path.join(ROOT_DIR, 'dataloader/cmg_training_data.pt')
+DATA_PATH = os.path.join(ROOT_DIR, 'dataloader/cmg_training_data_new.pt')
 OUTPUT_PATH = os.path.join(ROOT_DIR, 'evaluations/autoregressive_motion.npz')
 
-VX = 0.5
+VX = 2.5
 VY = 0.0
 YAW = 0.0
 DURATION = 1200 # 60 fps, 20 sec.
